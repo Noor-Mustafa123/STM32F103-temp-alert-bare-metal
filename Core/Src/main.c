@@ -94,6 +94,8 @@ int main(void)
   MX_TIM2_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
+  // start TIM2 peripheral counter 
+  HAL_TIM_Base_Start(&htim2);
 
   /* USER CODE END 2 */
 
