@@ -2,9 +2,13 @@
 #include "main.h"
 #include "ky_015.h"
 
-void KY_015_data_reader(void)
+void KY_015_data_reader()
 {
-    // TODO: Implement the function to read data from the KY-015 sensor and populate the KY_015_DATA structure.
+   
+    set_ky_015_data_pin_mode( GPIO_MODE_OUTPUT_PP, GPIO_NOPULL ); 
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, GPIO_PIN_RESET); 
+    HAL_Delay(18);
+
 }
 
 uint8_t delay_execution_in_microseconds_using_TIM2(int microseconds)
@@ -36,15 +40,12 @@ uint8_t delay_execution_in_microseconds_using_TIM2(int microseconds)
     return 0; // success
 }
 
-void SET_KY_015_DATA_PIN_MODE(GPIO_TypeDef *GPIO_port_pointer,
-                              uint16_t pin,
-                              uint32_t mode,
-                              uint32_t pull)
+void set_ky_015_data_pin_mode(uint32_t mode, uint32_t default_pull)
 {
     GPIO_InitTypeDef GPIO_init_struct = {0};
-    GPIO_init_struct.Pin = pin;
+    GPIO_init_struct.Pin = GPIO_PIN_3;
     GPIO_init_struct.Mode = mode;
-    GPIO_init_struct.Pull = pull;
+    GPIO_init_struct.Pull = default_pull;
     GPIO_init_struct.Speed = GPIO_SPEED_FREQ_LOW;
-    HAL_GPIO_Init(GPIO_port_pointer, &GPIO_init_struct);
+    HAL_GPIO_Init(GPIOA, &GPIO_init_struct);
 }
