@@ -37,7 +37,7 @@ uint8_t delay_execution_in_microseconds_using_TIM2(int microseconds)
 void set_ky_015_data_pin_mode(uint32_t mode, uint32_t default_pull)
 {
     GPIO_InitTypeDef GPIO_init_struct = {0};
-    GPIO_init_struct.Pin = GPIO_PIN_3;
+    GPIO_init_struct.Pin = GPIO_PIN_1;
     GPIO_init_struct.Mode = mode;
     GPIO_init_struct.Pull = default_pull;
     GPIO_init_struct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -45,9 +45,9 @@ void set_ky_015_data_pin_mode(uint32_t mode, uint32_t default_pull)
 }
 
 int transmission_signal_parser(){
-    while( HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == GPIO_PIN_RESET ); // wait until pull is up
+    while( HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_RESET ); // wait until pull is up
     __HAL_TIM_SET_COUNTER(&htim2, 0);
-    while( HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == GPIO_PIN_SET ); // wait until pull is down
+    while( HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_SET ); // wait until pull is down
     int duration= __HAL_TIM_GET_COUNTER(&htim2);
     
     int bit;
@@ -65,24 +65,23 @@ void KY_015_data_reader()
     // send out start signals to DHT11 sensor 
     set_ky_015_data_pin_mode( GPIO_MODE_OUTPUT_PP, GPIO_NOPULL ); 
     
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, GPIO_PIN_RESET); 
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_RESET); 
     HAL_Delay(18);
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_SET);
     delay_execution_in_microseconds_using_TIM2(20);
 
     // sensor confirmation protocol signals prior to data transmission
     set_ky_015_data_pin_mode(GPIO_MODE_INPUT, GPIO_PULLUP);
-    while(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == GPIO_PIN_SET);
-    while(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == GPIO_PIN_RESET); 
+    while(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_SET);
+    while(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_RESET); 
     delay_execution_in_microseconds_using_TIM2(80);
 
     // transmission start
-    
-    int resolved_bit[40]; 
 
-    for( int i = 0; i < 40; i++ ){
-     resolved_bit[i] = transmission_signal_parser();
+    uint8_t bytes[5] = {0, 0, 0, 0, 0};  // 5 empty bytes
+
+    for(int i = 0; i < 40; i++) {
+        bytes[i / 8] |= (resolved_bit[i] << (7 - (i % 8)));
     }
-
     
 }
