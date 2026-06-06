@@ -56,6 +56,9 @@ void Error_Handler(void);
 
 /* USER CODE END EFP */
 
+/* Exported variables --------------------------------------------------------*/
+extern TIM_HandleTypeDef htim2;
+
 /* Private defines -----------------------------------------------------------*/
 
 /* USER CODE BEGIN Private defines */
