@@ -7,81 +7,97 @@
 
 uint8_t delay_execution_in_microseconds_using_TIM2(int microseconds)
 {
-    if (microseconds <= 0)
-    {
-        return 1; // invalid input
-    }
-
-    if (htim2.Instance == NULL)
-    {
-        return 1; // TIM2 not configured
-    }
-
+    if (microseconds <= 0) return 1;
+    if (htim2.Instance == NULL) return 1;
     uint32_t arr = htim2.Instance->ARR;
-    if ((uint32_t)microseconds > arr)
-    {
-        return 1; // requested delay exceeds timer auto-reload
-    }
-
-    /* Reset counter then busy-wait until requested ticks (assumes 1 tick = 1 us) */
+    if ((uint32_t)microseconds > arr) return 1;
     __HAL_TIM_SET_COUNTER(&htim2, 0);
-    while ((__HAL_TIM_GET_COUNTER(&htim2)) < (uint32_t)microseconds)
-    {
-        /* busy wait */
-    }
+    while ((__HAL_TIM_GET_COUNTER(&htim2)) < (uint32_t)microseconds);
     __HAL_TIM_SET_COUNTER(&htim2, 0);
-
-    return 0; // success
+    return 0;
 }
 
-void set_ky_015_data_pin_mode(uint32_t mode, uint32_t default_pull)
+static void pc13_blink(int times)
 {
-    GPIO_InitTypeDef GPIO_init_struct = {0};
-    GPIO_init_struct.Pin = GPIO_PIN_1;
-    GPIO_init_struct.Mode = mode;
-    GPIO_init_struct.Pull = default_pull;
-    GPIO_init_struct.Speed = GPIO_SPEED_FREQ_LOW;
-    HAL_GPIO_Init(GPIOA, &GPIO_init_struct);
+    for (int i = 0; i < times; i++) {
+        HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
+        HAL_Delay(100);
+        HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);
+        HAL_Delay(100);
+    }
 }
 
-int transmission_signal_parser(){
-    while( HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_RESET ); // wait until pull is up
-    __HAL_TIM_SET_COUNTER(&htim2, 0);
-    while( HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_SET ); // wait until pull is down
-    int duration= __HAL_TIM_GET_COUNTER(&htim2);
-    
-    int bit;
-    
-    if(duration <= 40)   // use 40 as threshold between 26us and 70us
-        bit = 0;
-    else
-        bit = 1;
-    return bit;
-}
-
-
-void KY_015_data_reader()
+/* Wait for next edge captured by TIM2 CH2, return captured value or -1 on timeout */
+static int wait_for_edge(uint32_t timeout_count)
 {
-    // send out start signals to DHT11 sensor 
-    set_ky_015_data_pin_mode( GPIO_MODE_OUTPUT_PP, GPIO_NOPULL ); 
-    
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_RESET); 
+    __HAL_TIM_CLEAR_FLAG(&htim2, TIM_FLAG_CC2);
+    while (!__HAL_TIM_GET_FLAG(&htim2, TIM_FLAG_CC2) && timeout_count--);
+    if (timeout_count == 0) return -1;
+    return (int)HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_2);
+}
+
+int KY_015_data_reader()
+{
+    // STEP 1: send start signal - pull PA1 LOW for 18ms then release HIGH
+    GPIO_InitTypeDef GPIO_init = {0};
+    GPIO_init.Pin   = GPIO_PIN_1;
+    GPIO_init.Mode  = GPIO_MODE_OUTPUT_PP;
+    GPIO_init.Pull  = GPIO_NOPULL;
+    GPIO_init.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(GPIOA, &GPIO_init);
+
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_RESET);
     HAL_Delay(18);
     HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_SET);
-    delay_execution_in_microseconds_using_TIM2(20);
+    HAL_Delay(1);  // hold HIGH 20-40us (1ms is safe margin)
 
-    // sensor confirmation protocol signals prior to data transmission
-    set_ky_015_data_pin_mode(GPIO_MODE_INPUT, GPIO_PULLUP);
-    while(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_SET);
-    while(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_RESET); 
-    delay_execution_in_microseconds_using_TIM2(80);
+    // STEP 2: switch PA1 to input, start TIM2 Input Capture
+    GPIO_init.Mode = GPIO_MODE_INPUT;
+    GPIO_init.Pull = GPIO_PULLUP;
+    HAL_GPIO_Init(GPIOA, &GPIO_init);
 
-    // transmission start
+    HAL_TIM_Base_Start(&htim2);
+    HAL_TIM_IC_Start(&htim2, TIM_CHANNEL_2);
 
-    uint8_t bytes[5] = {0, 0, 0, 0, 0};  // 5 empty bytes
-
-    for(int i = 0; i < 40; i++) {
-        bytes[i / 8] |= (resolved_bit[i] << (7 - (i % 8)));
+    // STEP 3: handshake - DHT11 pulls LOW 80us (falling edge)
+    if (wait_for_edge(200000) == -1) {
+        HAL_TIM_IC_Stop(&htim2, TIM_CHANNEL_2);
+        return -1;
     }
-    
+    pc13_blink(1);  // 1 blink = DHT11 pulled LOW (alive)
+
+    // STEP 4: handshake - DHT11 releases HIGH 80us (rising edge)
+    if (wait_for_edge(200000) == -1) {
+        HAL_TIM_IC_Stop(&htim2, TIM_CHANNEL_2);
+        return -1;
+    }
+    pc13_blink(2);  // 2 blinks = handshake complete, ready to receive data
+
+    // STEP 5: read 40 data bits using Input Capture
+    // each bit: falling edge (50us LOW) -> rising edge -> falling edge (26us=0, 70us=1)
+    uint8_t bytes[5] = {0, 0, 0, 0, 0};
+
+    for (int i = 0; i < 40; i++) {
+        int t1, t2;
+
+        // wait for falling edge = start of 50us LOW preamble
+        if (wait_for_edge(20000) == -1) { HAL_TIM_IC_Stop(&htim2, TIM_CHANNEL_2); return -1; }
+
+        // wait for rising edge = end of LOW preamble, start of data HIGH
+        t1 = wait_for_edge(20000);
+        if (t1 == -1) { HAL_TIM_IC_Stop(&htim2, TIM_CHANNEL_2); return -1; }
+
+        // wait for falling edge = end of data HIGH
+        t2 = wait_for_edge(20000);
+        if (t2 == -1) { HAL_TIM_IC_Stop(&htim2, TIM_CHANNEL_2); return -1; }
+
+        uint32_t duration = (uint32_t)(t2 - t1);
+        int bit = (duration > 40) ? 1 : 0;
+        bytes[i / 8] |= (bit << (7 - (i % 8)));
+    }
+
+    HAL_TIM_IC_Stop(&htim2, TIM_CHANNEL_2);
+
+    // TODO: parse bytes - humidity=bytes[0], temp=bytes[2], checksum=bytes[4]
+    return 0;
 }
