@@ -22,6 +22,8 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "ky_015.h"
+#include <stdio.h>
+#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -93,7 +95,9 @@ int main(void)
   MX_TIM2_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
-  // startup blink PC13 3 times to confirm code is running
+  HAL_TIM_Base_Start(&htim2);
+
+  // startup: 3 blinks on PC13 to confirm MCU running
   for (int i = 0; i < 3; i++) {
       HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
       HAL_Delay(300);
@@ -109,12 +113,40 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    int result = KY_015_data_reader();
+    DHT11_Data sensor;
+    char uart_msg[64];
+
+    int result = KY_015_data_reader(&sensor);
+
     if (result == 0)
-        HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET); // PC13 ON = success
+    {
+        // send the reading over UART so it can be monitored on a PC
+        int len = snprintf(uart_msg, sizeof(uart_msg),
+                           "Temp: %dC  Humidity: %d%%\r\n",
+                           sensor.temperature, sensor.humidity);
+        HAL_UART_Transmit(&huart1, (uint8_t *)uart_msg, len, 1000);
+
+        // turn LED and buzzer on if temperature exceeds the alert threshold
+        if (sensor.temperature > 20)
+        {
+            HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, GPIO_PIN_SET);    // LED on
+            HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, GPIO_PIN_SET);    // buzzer on
+        }
+        else
+        {
+            HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, GPIO_PIN_RESET);  // LED off
+            HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, GPIO_PIN_RESET);  // buzzer off
+        }
+    }
     else
-        HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);   // PC13 OFF = fail
-    while(1);  // stop here so you can count blinks clearly
+    {
+        // sensor did not respond or checksum failed — report over UART
+        char *err_msg = "DHT11 read failed\r\n";
+        HAL_UART_Transmit(&huart1, (uint8_t *)err_msg, strlen(err_msg), 1000);
+    }
+
+    // DHT11 requires at least 1 second between reads — we wait 2 seconds
+    HAL_Delay(2000);
     /* USER CODE END 3 */
   }
   /* USER CODE END 3 */
@@ -172,7 +204,6 @@ static void MX_TIM2_Init(void)
 
   TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
-  TIM_IC_InitTypeDef sConfigIC = {0};
 
   /* USER CODE BEGIN TIM2_Init 1 */
 
@@ -195,18 +226,6 @@ static void MX_TIM2_Init(void)
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
   if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_IC_Init(&htim2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sConfigIC.ICPolarity  = TIM_ICPOLARITY_BOTHEDGE;
-  sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;
-  sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;
-  sConfigIC.ICFilter    = 0;
-  if (HAL_TIM_IC_ConfigChannel(&htim2, &sConfigIC, TIM_CHANNEL_2) != HAL_OK)
   {
     Error_Handler();
   }
@@ -267,7 +286,7 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOC_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3|GPIO_PIN_4, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2|GPIO_PIN_3, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);
 
   /*Configure GPIO pin : PA1 (KY-015 sensor data - input) */
@@ -276,8 +295,8 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PA3 (Red LED) PA4 (Green LED) */
-  GPIO_InitStruct.Pin = GPIO_PIN_3|GPIO_PIN_4;
+  /*Configure GPIO pins : PA2 (LED) PA3 (Buzzer) */
+  GPIO_InitStruct.Pin = GPIO_PIN_2|GPIO_PIN_3;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
