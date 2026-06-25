@@ -1,155 +1,148 @@
-# STM32 Temperature Monitor / Alert Prototype
+# STM32 Temperature Monitor & Alert
 
-This repository contains a temperature-monitor and alert prototype for the STM32F103C8T6 "Blue Pill" board. The project reads a DHT11/KY-015 temperature sensor every 2 seconds, sends the measured value over UART, and triggers an LED and buzzer when the temperature crosses a threshold.
+A bare-metal embedded project on the STM32F103 Blue Pill that reads temperature and humidity from a DHT11 sensor every 2 seconds, streams the readings over UART, and triggers an LED and buzzer alert when temperature exceeds a set threshold.
 
-## Project Description
+---
 
-The system is designed to demonstrate core embedded engineering concepts through a small practical project:
+## Hardware
 
-- Read temperature data from a DHT11-compatible sensor on **PA1**
-- Output the reading to a PC terminal over **USART1** at **115200 baud**
-- Turn on an **LED** connected to **PA2** when the temperature exceeds a limit
-- Drive a **buzzer** on **PA3** for an audible alert
-- Use **TIM2** as a microsecond-precision timer because the DHT11 protocol requires timing accuracy below 1 ms
+| Component | Part | Notes |
+|-----------|------|-------|
+| Microcontroller | STM32F103C8T6 "Blue Pill" | Clone chip — actual silicon is F103C6T6 (10 KB RAM / 32 KB Flash) |
+| Sensor | KY-015 (DHT11) | Temperature + humidity sensor module |
+| LED | KY-011 (bi-color LED) | Red/green, connected to PA2 |
+| Buzzer | KY-012 (active buzzer) | Sounds on HIGH signal, connected to PA3 |
+| Programmer | ST-Link V2 | Flashes and debugs over SWD |
 
-## Hardware Setup
+### Pin Connections
 
-- MCU: **STM32F103C8T6 Blue Pill**
-- Sensor: **DHT11 / KY-015** temperature sensor module
-- Communication: **ST-Link V2** via SWD for programming/debugging
-- Breadboard power rails: 3.3V and GND tied to the Blue Pill rails
+| MCU Pin | Connected To | Purpose |
+|---------|-------------|---------|
+| `PA1` | KY-015 DATA | DHT11 sensor data line (bidirectional) |
+| `PA2` | KY-011 SIGNAL | LED — ON when temp > threshold |
+| `PA3` | KY-012 SIGNAL | Buzzer — ON when temp > threshold |
+| `PA9` | USB-TTL TX | UART transmit (115200 baud) |
+| `SWDIO` | ST-Link SWDIO | SWD debug/flash |
+| `SWCLK` | ST-Link SWCLK | SWD clock |
+| `3.3V` | ST-Link 3.3V | Board power via ST-Link |
+| `GND` | ST-Link GND | Common ground |
 
-### Physical Connections
+---
 
-- **DHT11 / KY-015**
-  - `VCC` → `3.3V`
-  - `GND` → `GND`
-  - `DATA` → `PA1`
-- **LED**
-  - `PA2` → 220Ω resistor → LED anode
-  - LED cathode → `GND`
-- **Buzzer**
-  - `VCC` → `3.3V`
-  - `GND` → `GND`
-  - `SIGNAL` → `PA3`
-- **ST-Link V2**
-  - `SWDIO` → `SWDIO`
-  - `SWCLK` → `SWCLK`
-  - `GND` → `GND`
-  - `3.3V` → `3.3V`
+## How It Works
 
-### Breadboard Wiring Diagram
+### DHT11 Protocol
 
-```
-      PC / USB                 Breadboard                Blue Pill
-  +----------------+    +---------------------------+    +-----------+
-  | ST-Link V2 USB |    | 3.3V + rail  |  GND - rail |    |           |
-  |                |    |             |             |    |  Blue Pill|
-  |  SWDIO  -----> |----|-------------|             |    |           |
-  |  SWCLK  -----> |----|-------------|             |    |           |
-  |   3.3V  -----> |----| + 3.3V rail |             |    |  PA1 DHT11|
-  |   GND   -----> |----| -  GND rail |             |    |  PA2 LED  |
-  +----------------+    |             |             |    |  PA3 BUZZ |
-                        |  DHT11 DATA |             |    |           |
-                        +-------------+             |    +-----------+
-```
+The DHT11 uses a single-wire protocol. The MCU initiates every transaction:
 
-## Software Setup
+1. **Start signal** — MCU drives PA1 LOW for 20 ms, then releases HIGH
+2. **Sensor handshake** — DHT11 responds with ~80 µs LOW, then ~80 µs HIGH
+3. **40-bit data frame** — sensor sends 5 bytes one bit at a time:
+   - Each bit starts with a ~50 µs LOW preamble
+   - A short HIGH (~26 µs) = bit `0`
+   - A long HIGH (~70 µs) = bit `1`
+4. **5-byte frame layout:**
 
-Use VS Code with STM32 development tools:
+   | Byte | Content |
+   |------|---------|
+   | 0 | Humidity (integer) |
+   | 1 | Humidity (decimal, always 0 on DHT11) |
+   | 2 | Temperature °C (integer) |
+   | 3 | Temperature (decimal, always 0 on DHT11) |
+   | 4 | Checksum (bytes 0+1+2+3) |
 
-- Install the **ARM GCC toolchain** (`arm-none-eabi-gcc`)
-- Install **STM32 CLI tools** for build, flash, and debugging
-- Install VS Code extensions:
-  - **C/C++** (Microsoft)
-  - **Cortex-Debug**
-- Optionally use **STM32CubeMX** to inspect or regenerate project initialization code
+### Timing with TIM2
 
-### Project Generation Notes
+TIM2 is configured with a prescaler of 7, giving 1 tick = 1 µs at 8 MHz HSI. The code uses the TIM2 counter directly to measure how long the pin stays HIGH per bit, determining whether the bit is 0 or 1. A timeout is enforced on every wait so the program never hangs if the sensor does not respond.
 
-The original PDF workflow uses STM32CubeMX to configure:
+### Alert Logic
 
-- **PA1** as `GPIO_Input` for the DHT11 data line
-- **PA2** as `GPIO_Output` for LED control
-- **PA3** as `GPIO_Output` for buzzer control
-- **USART1** on `PA9`/`PA10` at `115200` baud
-- **TIM2** with prescaler set so each timer tick is `1 µs` and period `65535`
+- Temperature reading arrives every 2 seconds
+- If `temperature > 20°C`: PA2 (LED) and PA3 (buzzer) are driven HIGH
+- Otherwise both are driven LOW
+- Reading and result are transmitted over UART so they can be monitored on a PC
 
-CubeMX generates the HAL initialization code and a Makefile, then the user adds application logic inside the `USER CODE` blocks.
+---
 
-## Build Instructions
+## Tools Used
 
-From the project root:
+| Tool | Purpose |
+|------|---------|
+| **STM32CubeMX** | Generated peripheral initialization code (GPIO, TIM2, USART1) and the Makefile |
+| **arm-none-eabi-gcc** | Cross-compiler for ARM Cortex-M3 |
+| **GNU Make** | Build system |
+| **st-flash** (stlink-tools) | Flashes the `.bin` to the MCU over ST-Link |
+| **VS Code** + C/C++ extension | Code editing |
 
-```bash
-make clean
-make -j$(nproc)
-```
-
-Build artifacts are generated in `build/`:
-
-- `build/STM32_projects.elf`
-- `build/STM32_projects.hex`
-- `build/STM32_projects.bin`
-
-## Flashing
-
-Example with `st-flash`:
-
-```bash
-st-flash write build/STM32_projects.bin 0x8000000
-```
-
-Example with `openocd`:
-
-```bash
-openocd -f interface/stlink.cfg -f target/stm32f1x.cfg -c "program build/STM32_projects.elf verify reset exit"
-```
-
-## Implementation Guidance
-
-The PDF describes the DHT11 protocol and implementation strategy for this project:
-
-1. Drive the data pin low for **18 ms** to send the DHT11 start signal
-2. Release the pin high and wait **20 µs**
-3. Switch the pin to input mode and wait for the sensor response
-4. Read the sensor acknowledgment: **80 µs LOW**, then **80 µs HIGH**
-5. Read **40 bits** of data
-   - each bit begins with **50 µs LOW**
-   - a short **HIGH** pulse (~26 µs) = `0`
-   - a long **HIGH** pulse (~70 µs) = `1`
-6. Assemble 5 bytes: humidity integer, humidity decimal, temperature integer, temperature decimal, checksum
-7. Verify the checksum by adding the first four bytes and comparing to the fifth
-
-The project should use the HAL `GPIO_InitTypeDef` and `HAL_GPIO_Init()` calls to switch the DHT11 data pin between output and input modes at runtime.
-
-## Troubleshooting
-
-Common issues from the PDF:
-
-- **Flashes fine but no output**: the chip may be running; check UART setup and use the debugger
-- **DHT11 reads all zeros**: verify `PA1` wiring and add a **10kΩ pull-up** if the module does not already include one
-- **Reads once then stops**: DHT11 needs at least **1 second between readings**; use `HAL_Delay(2000)` for a 2 second cycle
-- **Buzzer silent**: verify whether it is **active** or **passive**; passive buzzer may require PWM, active buzzer only needs a HIGH signal
-- **LED does not light**: check LED polarity, resistor value, and whether `PA2` is actually being driven HIGH
-- **Checksum fails**: DHT11 timing is critical; ensure microsecond delays are accurate and the timer prescaler is configured correctly
+---
 
 ## Project Structure
 
-- `Core/Src/` — application source and HAL initialization code
-- `Core/Inc/` — application headers
-- `Drivers/STM32F1xx_HAL_Driver/` — HAL driver sources and headers
-- `Drivers/CMSIS/` — CMSIS headers and startup files
-- `startup_stm32f103xb.s` — startup assembly
-- `STM32F103XX_FLASH.ld` — linker script
-- `Makefile` — build rules and toolchain settings
+```
+├── Core/
+│   ├── Inc/
+│   │   ├── ky_015.h          # DHT11_Data struct and KY_015_data_reader declaration
+│   │   └── main.h            # HAL handle externs, peripheral declarations
+│   └── Src/
+│       ├── ky_015.c          # DHT11 protocol implementation (GPIO polling + TIM2)
+│       ├── main.c            # Peripheral init, main loop, alert logic
+│       ├── stm32f1xx_hal_msp.c  # Low-level peripheral clock / GPIO config
+│       └── stm32f1xx_it.c    # Interrupt handlers
+├── Drivers/
+│   ├── STM32F1xx_HAL_Driver/ # ST HAL driver sources
+│   └── CMSIS/                # ARM CMSIS headers
+├── startup_stm32f103xb.s     # Startup assembly (vector table, stack init)
+├── STM32F103XX_FLASH.ld      # Linker script — 10 KB RAM / 32 KB Flash
+└── Makefile                  # Build rules generated by CubeMX
+```
 
-## Notes
+---
 
-- The `KY_015_data_reader()` function in `Core/Src/ky_015.c` is the placeholder for the DHT11 read logic.
-- `delay_execution_in_microseconds_using_TIM2()` in `Core/Src/ky_015.c` provides the timer-based microsecond delays needed for the DHT11 protocol.
-- This project currently has the hardware initialization and build framework; the main sensor and alert application logic is intended to be added in the source files.
+## Build & Flash
+
+**Requirements:** `arm-none-eabi-gcc`, `make`, `stlink-tools`
+
+```bash
+# Build
+make
+
+# Flash
+st-flash write build/STM32_projects.bin 0x8000000
+```
+
+Build output goes to `build/`: `.elf`, `.hex`, `.bin`
+
+---
+
+## Monitor UART Output
+
+Connect a USB-TTL adapter to `PA9` (TX) and `GND`, then open a serial terminal at **115200 baud**:
+
+```bash
+# Linux
+screen /dev/ttyUSB0 115200
+```
+
+Expected output:
+```
+Temp: 24C  Humidity: 55%
+Temp: 24C  Humidity: 55%
+DHT11 read failed        ← if sensor doesn't respond
+```
+
+---
+
+## Key Implementation Notes
+
+**Linker script fix** — Blue Pill clones are often relabeled F103C6T6 chips (10 KB RAM / 32 KB Flash) sold as C8T6 (20 KB / 64 KB). Using the wrong memory sizes in the linker script causes the stack pointer to land outside valid RAM, triggering an instant HardFault on boot. The linker script in this repo is corrected for the actual hardware.
+
+**SWD kept enabled** — CubeMX defaults to `__HAL_AFIO_REMAP_SWJ_DISABLE()` which disables SWD after the first flash, permanently locking the chip out. This project uses `__HAL_AFIO_REMAP_SWJ_NONJTRST()` instead, which disables JTAG but keeps SWD available.
+
+**PA1 mode switching** — The DHT11 data line is bidirectional. The code reconfigures PA1 as push-pull output to send the start signal, then immediately reconfigures it as input with pull-up before the sensor responds. This is done at runtime using `HAL_GPIO_Init()`.
+
+---
 
 ## License
 
-This project follows the licensing terms in the STM32 HAL distribution. If no additional license is provided, assume the HAL code is used under ST’s standard license terms.
+Application code (files in `Core/`) is written by the project author.
+HAL and CMSIS sources in `Drivers/` are licensed by STMicroelectronics under their standard terms (see individual file headers).
