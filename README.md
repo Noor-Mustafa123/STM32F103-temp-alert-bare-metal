@@ -1,6 +1,7 @@
 # STM32 Temperature Monitor & Alert
 
 A bare-metal embedded project on the STM32F103 Blue Pill that reads temperature and humidity from a DHT11 sensor every 2 seconds, streams the readings over UART, and triggers an LED and buzzer alert when temperature exceeds a set threshold.
+DEMO Link: https://www.linkedin.com/posts/noormustafa715_project-link-httpslnkdindgzxnrej-descrption-ugcPost-7476007107285209089-Gs78/?utm_source=share&utm_medium=member_desktop&rcm=ACoAAD3VztoBqnFH6rlJuo7mzXSpDRqDyTKvQXc
 
 ---
 
