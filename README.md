@@ -1,4 +1,4 @@
-# STM32 Temperature Monitor & Alert
+# STM32 Temperature Monitor for Statistical Anomaly Detection
 
 A bare-metal embedded project on the STM32F103 Blue Pill that reads temperature and humidity from a DHT11 sensor every 2 seconds, streams the readings over UART, and triggers an LED and buzzer alert when temperature exceeds a set threshold.
 
