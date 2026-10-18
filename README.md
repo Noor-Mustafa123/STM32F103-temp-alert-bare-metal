@@ -2,6 +2,8 @@
 
 A bare-metal embedded project on the STM32F103 Blue Pill that reads temperature and humidity from a DHT11 sensor every 2 seconds, streams the readings over UART, and triggers an LED and buzzer alert when temperature exceeds a set threshold.
 
+This project is now being extended into a research project on low-cost anomaly detection. See [Roadmap: Statistical Anomaly Detection](#roadmap-statistical-anomaly-detection).
+
 DEMO Link: https://www.linkedin.com/posts/noormustafa715_project-link-httpslnkdindgzxnrej-descrption-ugcPost-7476007107285209089-Gs78/?utm_source=share&utm_medium=member_desktop&rcm=ACoAAD3VztoBqnFH6rlJuo7mzXSpDRqDyTKvQXc
 
 ---
@@ -141,6 +143,64 @@ DHT11 read failed        ← if sensor doesn't respond
 **SWD kept enabled** — CubeMX defaults to `__HAL_AFIO_REMAP_SWJ_DISABLE()` which disables SWD after the first flash, permanently locking the chip out. This project uses `__HAL_AFIO_REMAP_SWJ_NONJTRST()` instead, which disables JTAG but keeps SWD available.
 
 **PA1 mode switching** — The DHT11 data line is bidirectional. The code reconfigures PA1 as push-pull output to send the start signal, then immediately reconfigures it as input with pull-up before the sensor responds. This is done at runtime using `HAL_GPIO_Init()`.
+
+---
+
+## Roadmap: Statistical Anomaly Detection
+
+> **Status: planned / in progress.** Nothing in this section is implemented yet.
+
+### Goal
+
+Extend this monitor from a fixed-threshold alarm into a **statistical anomaly detector** that learns what "normal" looks like for a device and flags readings that are unusually far from it, running entirely on the STM32 with no operating system, no cloud and no PC in the loop.
+
+The work will be written up as a research paper. It builds on recent work that ran an on-device Z-score detector on a more capable Cortex-M4 board with a floating-point unit ([arXiv:2604.08581](https://arxiv.org/pdf/2604.08581)). This project tests the same idea on a much cheaper and smaller chip, and adds the comparisons that paper left as future work.
+
+### Research questions
+
+1. Does on-device statistical anomaly detection still work on a Cortex-M3 with **no floating-point unit and only 10 KB RAM**?
+2. How does it compare with the simple fixed-threshold alarm this project already uses?
+3. How sensitive are the results to the choice of threshold?
+
+### Monitored device
+
+An old **pedestal fan**. Its motor housing gets very hot while running and it has no built-in temperature monitoring, which is the gap a low-cost monitor fills.
+
+- The DHT11 is mounted a few centimetres from the motor housing so it reads the warm air near the motor and stays within its 0–50 °C range.
+- Anomalies will be created only through safe controls (for example, changing speed settings). The blades will not be stalled and the motor will not be blocked.
+- The fan will not be left running unattended for long periods.
+
+### How the detector works
+
+1. **Learning phase:** for a fixed period at start-up, the MCU collects readings and computes their **mean** and **standard deviation**.
+2. **Detection phase:** every new reading gets a **Z-score**, the number of standard deviations it lies from the mean.
+3. **Alert:** if the Z-score's size exceeds a chosen threshold (starting around 3), the reading is flagged and the existing LED and buzzer are triggered.
+
+The existing `temperature > 20 °C` logic is kept as the **fixed-threshold baseline** for comparison.
+
+### What will be measured
+
+| Metric | How |
+|--------|-----|
+| Detection rate | Fraction of induced anomalies that were flagged |
+| False-alarm rate | Flags raised during normal operation |
+| Detection delay | Time from the start of an anomaly to the first flag |
+| Flash and RAM use | From the build output / map file |
+| Compute time per reading | Measured on the MCU at 8 MHz |
+
+### Steps
+
+- [x] DHT11 driver, UART output and fault handling (sensor timeout, checksum)
+- [x] Fixed-threshold alert with LED and buzzer (baseline)
+- [ ] Confirm sensor placement on the fan keeps readings below ~45 °C at every speed
+- [ ] Define what counts as normal and as an anomaly for the fan
+- [ ] Design the detector on paper (learning-phase length, threshold, behaviour after an alert)
+- [ ] Add timestamps to UART output and save logs as CSV on the PC
+- [ ] Write and test the Z-score detector in C on a PC with made-up data
+- [ ] Port the detector to the STM32 and measure flash, RAM and timing
+- [ ] Record a long normal run plus anomaly sessions, noting the time of each event
+- [ ] Analyse results and compare against the fixed threshold at several threshold values
+- [ ] Write the paper
 
 ---
 
