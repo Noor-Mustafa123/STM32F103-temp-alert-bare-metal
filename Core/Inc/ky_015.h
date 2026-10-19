@@ -9,6 +9,7 @@
  * Both fields are integers — the DHT11 does not report decimal places.
  */
 typedef struct {
+    // todo: get more data from sensor output and incldue in struct
     uint8_t temperature;  // degrees Celsius
     uint8_t humidity;     // percent relative humidity
 } DHT11_Data;
