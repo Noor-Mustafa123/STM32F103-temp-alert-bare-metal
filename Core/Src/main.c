@@ -105,6 +105,15 @@ int main(void)
       HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);
       HAL_Delay(300);
   }
+
+  // learn baseline before entering the main loop
+  z_score_preliminary_data_t preliminary_data;
+  if (calculate_z_score_preliminary_data(Z_SCORE_SAMPLE_SIZE, &preliminary_data) != 0)
+  {
+      char *err_msg = "learning failed\r\n";
+      HAL_UART_Transmit(&huart1, (uint8_t *)err_msg, strlen(err_msg), 1000);
+      Error_Handler();
+  }
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -115,19 +124,19 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
     dht11_data_t dht11_data;
-    char uart_msg[64];
-    z_score_preliminary_data_t preliminary_data;
+    char uart_msg[128];
 
     int result_ky_015 = KY_015_data_reader(&dht11_data);
-    int result_z_score = calculate_z_score_preliminary_data(5,&preliminary_data);
 
-    if (result_ky_015 == 0 && result_z_score == 0)
+    if (result_ky_015 == 0)
     {
-        int z_score = calculate_z_score(preliminary_data, dht11_data);
-        // send the reading over UART so it can be monitored on a PC
+        float z_score = calculate_z_score(preliminary_data, dht11_data);
         int len = snprintf(uart_msg, sizeof(uart_msg),
-                           "Temp: %dC  Humidity: %d%%\r\n Standard Deviation: %dC Z-Score: %d",
-                           dht11_data.temperature, dht11_data.humidity, preliminary_data.standard_deviation, z_score);
+                           "Temp: %dC  Humidity: %d%%  StdDev: %.1fC  Z-Score: %.1f\r\n",
+                           dht11_data.temperature, dht11_data.humidity,
+                           preliminary_data.standard_deviation, z_score);
+        if (len > (int)sizeof(uart_msg))
+            len = sizeof(uart_msg);
         HAL_UART_Transmit(&huart1, (uint8_t *)uart_msg, len, 1000);
 
         // turn LED and buzzer on if temperature exceeds the alert threshold
@@ -144,7 +153,6 @@ int main(void)
     }
     else
     {
-        // dht11_data did not respond or checksum failed — report over UART
         char *err_msg = "read failed\r\n";
         HAL_UART_Transmit(&huart1, (uint8_t *)err_msg, strlen(err_msg), 1000);
     }

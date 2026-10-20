@@ -1,72 +1,56 @@
-#include <z_score.h>
-#include <ky_015.h>
+#include "z_score.h"
+#include "main.h"
 #include <math.h>
-
-int calculate_average_temperature(int num_readings)
-{
-    int total_temperature = 0;
-    for (int i = 0; i < num_readings; i++)
-    {
-        dht11_data_t data;
-        if (KY_015_data_reader(&data) != 0)
-        {
-            return -1;
-        }
-        total_temperature += data.temperature;
-    }
-    return total_temperature / num_readings;
-}
-
-int calculate_standard_deviation(int num_readings, int average_temperature)
-{
-    int squared_deviations[num_readings];
-    for (int i = 0; i < num_readings; i++)
-    {
-        dht11_data_t data;
-        if (KY_015_data_reader(&data) != 0)
-        {
-            return -1;
-        }
-        int deviation = average_temperature - data.temperature;
-        squared_deviations[i] = deviation * deviation;
-    }
-
-    int sum_of_deviations;
-    for (int i = 0; i < sizeof(squared_deviations); i++)
-    {
-        sum_of_deviations += squared_deviations[i];
-    }
-    int mean = sum_of_deviations / sizeof(squared_deviations);
-    int standard_deviation = sqrt(mean);
-    return standard_deviation;
-}
 
 int calculate_z_score_preliminary_data(int sample_size, z_score_preliminary_data_t *preliminary_data)
 {
+    uint8_t readings[sample_size];
 
-    // calculate initial average temperature
-    int average_temperature = calculate_average_temperature(sample_size);
-    if (average_temperature == -1)
+    // collect all samples once, with a delay between each read
+    for (int i = 0; i < sample_size; i++)
     {
-        return -1;
+        dht11_data_t data;
+        if (KY_015_data_reader(&data) != 0)
+        {
+            return -1;
+        }
+        readings[i] = data.temperature;
+        if (i < sample_size - 1)
+        {
+            HAL_Delay(2000);
+        }
     }
 
-    // calculate standard deviation
-    int standard_deviation = calculate_standard_deviation(sample_size, average_temperature);
-    if (standard_deviation == -1)
+    // calculate average from the collected samples
+    float total = 0.0f;
+    for (int i = 0; i < sample_size; i++)
     {
-        return -1;
+        total += readings[i];
     }
+    float average = total / sample_size;
 
-    preliminary_data->average_temperature = average_temperature;
-    preliminary_data->standard_deviation = standard_deviation;
+    // calculate standard deviation from the same samples
+    float sum_sq = 0.0f;
+    for (int i = 0; i < sample_size; i++)
+    {
+        float deviation = readings[i] - average;
+        sum_sq += deviation * deviation;
+    }
+    float variance = sum_sq / sample_size;
+    float std_dev = sqrtf(variance);
+
+    preliminary_data->average_temperature = average;
+    preliminary_data->standard_deviation = std_dev;
 
     return 0;
 }
 
-int calculate_z_score(z_score_preliminary_data_t preliminary_data, dht11_data_t dht11_data)
+float calculate_z_score(z_score_preliminary_data_t preliminary_data, dht11_data_t dht11_data)
 {
-        int difference = dht11_data.temperature - preliminary_data.average_temperature;
-        int z_score = difference / preliminary_data.standard_deviation;
-        return z_score;
+    if (preliminary_data.standard_deviation == 0.0f)
+    {
+        return 0.0f;
+    }
+    float difference = dht11_data.temperature - preliminary_data.average_temperature;
+    return difference / preliminary_data.standard_deviation;
 }
