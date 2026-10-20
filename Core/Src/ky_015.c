@@ -49,7 +49,7 @@ static int wait_for_pin_state(GPIO_PinState target_state, uint32_t timeout_us)
  * Returns  0 and fills *data on success.
  * Returns -1 if the sensor does not respond or checksum fails.
  */
-int KY_015_data_reader(DHT11_Data *data)
+int KY_015_data_reader(dht11_data_t *data)
 {
     GPIO_InitTypeDef gpio_config = {0};
     gpio_config.Pin   = GPIO_PIN_1;

@@ -24,6 +24,7 @@
 #include "ky_015.h"
 #include <stdio.h>
 #include <string.h>
+#include "z_score.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -113,21 +114,24 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    DHT11_Data sensor;
+    dht11_data_t dht11_data;
     char uart_msg[64];
+    z_score_preliminary_data_t preliminary_data;
 
-    int result = KY_015_data_reader(&sensor);
+    int result_ky_015 = KY_015_data_reader(&dht11_data);
+    int result_z_score = calculate_z_score_preliminary_data(5,&preliminary_data);
 
-    if (result == 0)
+    if (result_ky_015 == 0 && result_z_score == 0)
     {
+        int z_score = calculate_z_score(preliminary_data, dht11_data);
         // send the reading over UART so it can be monitored on a PC
         int len = snprintf(uart_msg, sizeof(uart_msg),
-                           "Temp: %dC  Humidity: %d%%\r\n",
-                           sensor.temperature, sensor.humidity);
+                           "Temp: %dC  Humidity: %d%%\r\n Standard Deviation: %dC Z-Score: %d",
+                           dht11_data.temperature, dht11_data.humidity, preliminary_data.standard_deviation, z_score);
         HAL_UART_Transmit(&huart1, (uint8_t *)uart_msg, len, 1000);
 
         // turn LED and buzzer on if temperature exceeds the alert threshold
-        if (sensor.temperature > 20)
+        if (dht11_data.temperature > 20)
         {
             HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, GPIO_PIN_SET);    // LED on
             HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, GPIO_PIN_SET);    // buzzer on
@@ -140,8 +144,8 @@ int main(void)
     }
     else
     {
-        // sensor did not respond or checksum failed — report over UART
-        char *err_msg = "DHT11 read failed\r\n";
+        // dht11_data did not respond or checksum failed — report over UART
+        char *err_msg = "read failed\r\n";
         HAL_UART_Transmit(&huart1, (uint8_t *)err_msg, strlen(err_msg), 1000);
     }
 
@@ -289,7 +293,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2|GPIO_PIN_3, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);
 
-  /*Configure GPIO pin : PA1 (KY-015 sensor data - input) */
+  /*Configure GPIO pin : PA1 (KY-015 dht11_data data - input) */
   GPIO_InitStruct.Pin = GPIO_PIN_1;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
