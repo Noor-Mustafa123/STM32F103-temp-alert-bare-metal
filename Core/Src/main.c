@@ -21,7 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "ky_015.h"
+#include "ky_001.h"
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -107,6 +107,7 @@ int main(void)
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
   HAL_TIM_Base_Start(&htim2);
+  KY_001_init();   // PA1 as open-drain 1-Wire bus for the DS18B20
 
   // startup: 3 blinks on PC13 to confirm MCU running
   for (int i = 0; i < 3; i++) {
@@ -140,26 +141,28 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    dht11_data_t dht11_data;
+    ds18b20_data_t sensor_data;
     char uart_msg[128];
 
-    int result_ky_015 = KY_015_data_reader(&dht11_data);
+    // blocks for up to ~750 ms while the DS18B20 measures
+    int result_ky_001 = KY_001_data_reader(&sensor_data);
 
-    if (result_ky_015 == 0)
+    if (result_ky_001 == 0)
     {
-        float z_score = calculate_z_score(preliminary_data, dht11_data);
+        float z_score = calculate_z_score(preliminary_data, sensor_data);
 
+        char temp_str[12];
         char std_dev_str[12];
         char z_score_str[12];
+        format_tenths(temp_str, sizeof(temp_str), sensor_data.temperature);
         format_tenths(std_dev_str, sizeof(std_dev_str), preliminary_data.standard_deviation);
         format_tenths(z_score_str, sizeof(z_score_str), z_score);
 
         int len = snprintf(uart_msg, sizeof(uart_msg),
-                           "Temp: %dC  Humidity: %d%%  StdDev: %sC  Z-Score: %s\r\n",
-                           dht11_data.temperature, dht11_data.humidity,
-                           std_dev_str, z_score_str);
-        if (len > (int)sizeof(uart_msg))
-            len = sizeof(uart_msg);
+                           "Temp: %sC  StdDev: %sC  Z-Score: %s\r\n",
+                           temp_str, std_dev_str, z_score_str);
+        if (len > (int)sizeof(uart_msg) - 1)
+            len = sizeof(uart_msg) - 1;
         HAL_UART_Transmit(&huart1, (uint8_t *)uart_msg, len, 1000);
 
         // turn LED and buzzer on if the reading is an anomaly in either direction
@@ -180,7 +183,7 @@ int main(void)
         HAL_UART_Transmit(&huart1, (uint8_t *)err_msg, strlen(err_msg), 1000);
     }
 
-    // DHT11 requires at least 1 second between reads — we wait 2 seconds
+    // pause before the next reading (the DS18B20 conversion adds up to ~750 ms)
     HAL_Delay(2000);
     /* USER CODE END 3 */
   }
@@ -324,7 +327,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2|GPIO_PIN_3, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);
 
-  /*Configure GPIO pin : PA1 (KY-015 dht11_data data - input) */
+  /*Configure GPIO pin : PA1 (KY-001 DS18B20 data; reconfigured as open-drain by KY_001_init) */
   GPIO_InitStruct.Pin = GPIO_PIN_1;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;

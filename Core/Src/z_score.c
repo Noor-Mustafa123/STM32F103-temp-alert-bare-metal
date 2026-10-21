@@ -4,15 +4,15 @@
 
 int calculate_z_score_preliminary_data(int sample_size, z_score_preliminary_data_t *preliminary_data)
 {
-    uint8_t readings[sample_size];
+    float readings[sample_size];
     int collected = 0;
     int failures = 0;
 
     // collect samples until we have enough good ones, skipping failed reads
     while (collected < sample_size)
     {
-        dht11_data_t data;
-        if (KY_015_data_reader(&data) == 0)
+        ds18b20_data_t data;
+        if (KY_001_data_reader(&data) == 0)
         {
             readings[collected] = data.temperature;
             collected++;
@@ -62,8 +62,8 @@ int calculate_z_score_preliminary_data(int sample_size, z_score_preliminary_data
     return 0;
 }
 
-float calculate_z_score(z_score_preliminary_data_t preliminary_data, dht11_data_t dht11_data)
+float calculate_z_score(z_score_preliminary_data_t preliminary_data, ds18b20_data_t sensor_data)
 {
-    float difference = dht11_data.temperature - preliminary_data.average_temperature;
+    float difference = sensor_data.temperature - preliminary_data.average_temperature;
     return difference / preliminary_data.standard_deviation;
 }

@@ -1,6 +1,8 @@
 # STM32 Temperature Monitor for Statistical Anomaly Detection
 
-A bare-metal embedded project on the STM32F103 Blue Pill that reads temperature and humidity from a DHT11 sensor every 2 seconds, streams the readings over UART, and triggers an LED and buzzer alert when temperature exceeds a set threshold.
+A bare-metal embedded project on the STM32F103 Blue Pill that reads temperature from a DS18B20 sensor (KY-001 module) every few seconds, streams the readings over UART, and triggers an LED and buzzer alert when a reading is statistically unusual (Z-score detector).
+
+> The sensor was switched from the DHT11 (KY-015) to the DS18B20 (KY-001): it measures up to 125 °C (the DHT11 stops at 50 °C) and resolves 0.0625 °C instead of whole degrees. The old DHT11 driver is kept in the repo for reference but is no longer built.
 
 This project is now being extended into a research project on low-cost anomaly detection. See [Roadmap: Statistical Anomaly Detection](#roadmap-statistical-anomaly-detection).
 
@@ -13,7 +15,7 @@ DEMO Link: https://www.linkedin.com/posts/noormustafa715_project-link-httpslnkdi
 | Component | Part | Notes |
 |-----------|------|-------|
 | Microcontroller | STM32F103C8T6 "Blue Pill" | Clone chip — actual silicon is F103C6T6 (10 KB RAM / 32 KB Flash) |
-| Sensor | KY-015 (DHT11) | Temperature + humidity sensor module |
+| Sensor | KY-001 (DS18B20) | Digital temperature sensor, −55 to +125 °C, 0.0625 °C resolution, on-board pull-up resistor |
 | LED | KY-011 (bi-color LED) | Red/green, connected to PA2 |
 | Buzzer | KY-012 (active buzzer) | Sounds on HIGH signal, connected to PA3 |
 | Programmer | ST-Link V2 | Flashes and debugs over SWD |
@@ -22,7 +24,7 @@ DEMO Link: https://www.linkedin.com/posts/noormustafa715_project-link-httpslnkdi
 
 | MCU Pin | Connected To | Purpose |
 |---------|-------------|---------|
-| `PA1` | KY-015 DATA | DHT11 sensor data line (bidirectional) |
+| `PA1` | KY-001 DATA | DS18B20 1-Wire data line (open-drain) |
 | `PA2` | KY-011 SIGNAL | LED — ON when temp > threshold |
 | `PA3` | KY-012 SIGNAL | Buzzer — ON when temp > threshold |
 | `PA9` | USB-TTL TX | UART transmit (115200 baud) |
@@ -35,29 +37,32 @@ DEMO Link: https://www.linkedin.com/posts/noormustafa715_project-link-httpslnkdi
 
 ## How It Works
 
-### DHT11 Protocol
+### DS18B20 (1-Wire) Protocol
 
-The DHT11 uses a single-wire protocol. The MCU initiates every transaction:
+The DS18B20 uses the Dallas/Maxim 1-Wire bus: one data line shared by the MCU and the sensor. Neither side drives it HIGH; each can only pull it LOW, and the pull-up resistor on the KY-001 board brings it back HIGH. PA1 is therefore set as an **open-drain** output, and its level is read back through the input register.
 
-1. **Start signal** — MCU drives PA1 LOW for 20 ms, then releases HIGH
-2. **Sensor handshake** — DHT11 responds with ~80 µs LOW, then ~80 µs HIGH
-3. **40-bit data frame** — sensor sends 5 bytes one bit at a time:
-   - Each bit starts with a ~50 µs LOW preamble
-   - A short HIGH (~26 µs) = bit `0`
-   - A long HIGH (~70 µs) = bit `1`
-4. **5-byte frame layout:**
+1. **Reset** — MCU pulls the line LOW for 480 µs, releases it, and the sensor answers with a **presence pulse** (LOW) about 70 µs later
+2. **Commands** — sent as bytes, least-significant bit first, one ~70 µs time slot per bit:
+   - `0xCC` SKIP ROM (only one sensor on the bus)
+   - `0x44` CONVERT T (start measuring)
+3. **Wait** — the sensor answers read slots with 0 while measuring and 1 when done (up to ~750 ms at 12-bit resolution)
+4. **Read** — reset, `0xCC`, then `0xBE` READ SCRATCHPAD, and read 9 bytes:
 
    | Byte | Content |
    |------|---------|
-   | 0 | Humidity (integer) |
-   | 1 | Humidity (decimal, always 0 on DHT11) |
-   | 2 | Temperature °C (integer) |
-   | 3 | Temperature (decimal, always 0 on DHT11) |
-   | 4 | Checksum (bytes 0+1+2+3) |
+   | 0–1 | Temperature, signed 16-bit, 1/16 °C per step |
+   | 2–3 | Alarm registers |
+   | 4 | Configuration (resolution) |
+   | 5–7 | Reserved |
+   | 8 | CRC-8 of bytes 0–7 |
+
+5. **Verify** — the Dallas CRC-8 must match byte 8; the driver also rejects all-zero data and the 85 °C power-on value
+
+Timing-critical parts of each slot run with interrupts briefly disabled, so a SysTick interrupt cannot stretch them.
 
 ### Timing with TIM2
 
-TIM2 is configured with a prescaler of 7, giving 1 tick = 1 µs at 8 MHz HSI. The code uses the TIM2 counter directly to measure how long the pin stays HIGH per bit, determining whether the bit is 0 or 1. A timeout is enforced on every wait so the program never hangs if the sensor does not respond.
+TIM2 is configured with a prescaler of 7, giving 1 tick = 1 µs at 8 MHz HSI. The 1-Wire driver uses the TIM2 counter for its microsecond delays (reset pulse, bit slots, sampling point). The conversion wait has a 1 s timeout so the program never hangs if the sensor does not respond.
 
 ### Alert Logic
 
@@ -85,10 +90,12 @@ TIM2 is configured with a prescaler of 7, giving 1 tick = 1 µs at 8 MHz HSI. Th
 ```
 ├── Core/
 │   ├── Inc/
-│   │   ├── ky_015.h          # DHT11_Data struct and KY_015_data_reader declaration
+│   │   ├── ky_001.h          # ds18b20_data_t struct, KY_001_init / KY_001_data_reader
+│   │   ├── ky_015.h          # old DHT11 driver header (not built)
 │   │   └── main.h            # HAL handle externs, peripheral declarations
 │   └── Src/
-│       ├── ky_015.c          # DHT11 protocol implementation (GPIO polling + TIM2)
+│       ├── ky_001.c          # DS18B20 1-Wire implementation (open-drain GPIO + TIM2)
+│       ├── ky_015.c          # old DHT11 driver (kept for reference, not built)
 │       ├── main.c            # Peripheral init, main loop, alert logic
 │       ├── stm32f1xx_hal_msp.c  # Low-level peripheral clock / GPIO config
 │       └── stm32f1xx_it.c    # Interrupt handlers
@@ -129,9 +136,9 @@ screen /dev/ttyUSB0 115200
 
 Expected output:
 ```
-Temp: 24C  Humidity: 55%
-Temp: 24C  Humidity: 55%
-DHT11 read failed        ← if sensor doesn't respond
+Temp: 38.4C  StdDev: 0.2C  Z-Score: 0.5
+Temp: 38.5C  StdDev: 0.2C  Z-Score: 1.0
+read failed        ← if the sensor doesn't respond or the CRC fails
 ```
 
 ---
@@ -142,7 +149,7 @@ DHT11 read failed        ← if sensor doesn't respond
 
 **SWD kept enabled** — CubeMX defaults to `__HAL_AFIO_REMAP_SWJ_DISABLE()` which disables SWD after the first flash, permanently locking the chip out. This project uses `__HAL_AFIO_REMAP_SWJ_NONJTRST()` instead, which disables JTAG but keeps SWD available.
 
-**PA1 mode switching** — The DHT11 data line is bidirectional. The code reconfigures PA1 as push-pull output to send the start signal, then immediately reconfigures it as input with pull-up before the sensor responds. This is done at runtime using `HAL_GPIO_Init()`.
+**PA1 as open-drain** — The 1-Wire line is shared, so PA1 is configured once as an open-drain output in `KY_001_init()`. Writing 1 releases the line (the KY-001's pull-up brings it HIGH) and the pin level is read from `GPIOA->IDR`, so no runtime mode switching is needed. A bare DS18B20 without the module needs an external 4.7 kΩ pull-up to 3.3 V.
 
 ---
 
@@ -166,7 +173,7 @@ The work will be written up as a research paper. It builds on recent work that r
 
 An old **pedestal fan**. Its motor housing gets very hot while running and it has no built-in temperature monitoring, which is the gap a low-cost monitor fills.
 
-- The DHT11 is mounted a few centimetres from the motor housing so it reads the warm air near the motor and stays within its 0–50 °C range.
+- The DS18B20 (KY-001) is mounted a few centimetres from the motor housing so it reads the warm air near the motor. Its 125 °C range leaves plenty of headroom (the DHT11 used earlier stopped at 50 °C).
 - Anomalies will be created only through safe controls (for example, changing speed settings). The blades will not be stalled and the motor will not be blocked.
 - The fan will not be left running unattended for long periods.
 
@@ -191,8 +198,9 @@ The existing `temperature > 20 °C` logic is kept as the **fixed-threshold basel
 ### Steps
 
 - [x] DHT11 driver, UART output and fault handling (sensor timeout, checksum)
+- [x] Switched to the DS18B20 (KY-001): 1-Wire driver with CRC check, 0.0625 °C resolution
 - [x] Fixed-threshold alert with LED and buzzer (baseline)
-- [ ] Confirm sensor placement on the fan keeps readings below ~45 °C at every speed
+- [ ] Cold-start log on the fan: find when the temperature levels off (sets the warm-up time)
 - [ ] Define what counts as normal and as an anomaly for the fan
 - [ ] Design the detector on paper (learning-phase length, threshold, behaviour after an alert)
 - [ ] Add timestamps to UART output and save logs as CSV on the PC
