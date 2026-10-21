@@ -62,7 +62,8 @@ _Min_Stack_Size = 0x400; /* required amount of stack */
 /* Specify the memory areas */
 MEMORY
 {
-RAM (xrw)      : ORIGIN = 0x20000000, LENGTH = 10K
+RAM (xrw)      : ORIGIN = 0x20000000, LENGTH = 6K
+LOGRAM (xrw)    : ORIGIN = 0x20001800, LENGTH = 4K
 FLASH (rx)      : ORIGIN = 0x8000000, LENGTH = 32K
 }
 
@@ -194,6 +195,12 @@ SECTIONS
   } >RAM
 
 
+
+  /* RAM log buffer at fixed address for SWD readback */
+  .logbuf (NOLOAD) :
+  {
+    KEEP(*(.logbuf))
+  } >LOGRAM
 
   /* Remove information from the standard libraries */
   /DISCARD/ :

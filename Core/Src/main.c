@@ -26,6 +26,7 @@
 #include <string.h>
 #include <math.h>
 #include "z_score.h"
+#include "log_buffer.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -108,6 +109,7 @@ int main(void)
   /* USER CODE BEGIN 2 */
   HAL_TIM_Base_Start(&htim2);
   KY_001_init();   // PA1 as open-drain 1-Wire bus for the DS18B20
+  log_init();      // clear RAM log buffer
 
   // startup: 3 blinks on PC13 to confirm MCU running
   for (int i = 0; i < 3; i++) {
@@ -117,20 +119,41 @@ int main(void)
       HAL_Delay(300);
   }
 
+  // health check: verify KY-001 sensor is connected before proceeding
+  {
+      ds18b20_data_t health_check;
+      if (KY_001_data_reader(&health_check) == 0)
+      {
+          log_write("health check: KY-001 OK\n");
+          // short buzzer beep to confirm sensor detected
+          HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, GPIO_PIN_SET);
+          HAL_Delay(200);
+          HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, GPIO_PIN_RESET);
+      }
+      else
+      {
+          log_write("health check: KY-001 NOT detected!\n");
+      }
+  }
+
   // let the fan warm up before learning, so the warm-up climb isn't learned as normal
-  char *warmup_msg = "warming up...\r\n";
-  HAL_UART_Transmit(&huart1, (uint8_t *)warmup_msg, strlen(warmup_msg), 1000);
+  log_write("warming up...\n");
   HAL_Delay(Z_SCORE_WARMUP_MS);
 
   // learn baseline before entering the main loop; retry until it succeeds,
   // since detecting against an unlearned baseline would be meaningless
   z_score_preliminary_data_t preliminary_data;
-  char *learn_msg = "learning baseline...\r\n";
-  HAL_UART_Transmit(&huart1, (uint8_t *)learn_msg, strlen(learn_msg), 1000);
+  log_write("learning baseline...\n");
   while (calculate_z_score_preliminary_data(Z_SCORE_SAMPLE_SIZE, &preliminary_data) != 0)
   {
-      char *err_msg = "learning failed, retrying\r\n";
-      HAL_UART_Transmit(&huart1, (uint8_t *)err_msg, strlen(err_msg), 1000);
+      log_write("learning failed, retrying\n");
+  }
+  {
+      char sd_str[12];
+      char sd_msg[32];
+      format_tenths(sd_str, sizeof(sd_str), preliminary_data.standard_deviation);
+      snprintf(sd_msg, sizeof(sd_msg), "SD:%s\n", sd_str);
+      log_write(sd_msg);
   }
   /* USER CODE END 2 */
 
@@ -152,18 +175,17 @@ int main(void)
         float z_score = calculate_z_score(preliminary_data, sensor_data);
 
         char temp_str[12];
-        char std_dev_str[12];
         char z_score_str[12];
         format_tenths(temp_str, sizeof(temp_str), sensor_data.temperature);
-        format_tenths(std_dev_str, sizeof(std_dev_str), preliminary_data.standard_deviation);
         format_tenths(z_score_str, sizeof(z_score_str), z_score);
 
         int len = snprintf(uart_msg, sizeof(uart_msg),
-                           "Temp: %sC  StdDev: %sC  Z-Score: %s\r\n",
-                           temp_str, std_dev_str, z_score_str);
+                           "T:%s Z:%s\n",
+                           temp_str, z_score_str);
         if (len > (int)sizeof(uart_msg) - 1)
             len = sizeof(uart_msg) - 1;
-        HAL_UART_Transmit(&huart1, (uint8_t *)uart_msg, len, 1000);
+        uart_msg[len] = '\0';
+        log_write(uart_msg);
 
         // turn LED and buzzer on if the reading is an anomaly in either direction
         if (fabsf(z_score) > Z_SCORE_THRESHOLD)
@@ -179,8 +201,7 @@ int main(void)
     }
     else
     {
-        char *err_msg = "read failed\r\n";
-        HAL_UART_Transmit(&huart1, (uint8_t *)err_msg, strlen(err_msg), 1000);
+        log_write("read failed\n");
     }
 
     // pause before the next reading (the DS18B20 conversion adds up to ~750 ms)
