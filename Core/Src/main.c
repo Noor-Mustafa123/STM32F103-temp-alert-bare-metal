@@ -24,6 +24,7 @@
 #include "ky_015.h"
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 #include "z_score.h"
 /* USER CODE END Includes */
 
@@ -62,7 +63,16 @@ static void MX_USART1_UART_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
+// nano.specs printf has no %f, so build "4.3" from integers instead
+static void format_tenths(char *buf, size_t size, float value)
+{
+    int tenths = (int)(value * 10.0f);      // 4.3 -> 43
+    const char *sign = (tenths < 0) ? "-" : "";
+    if (tenths < 0)
+        tenths = -tenths;
+    // 43 / 10 = 4 (whole part), 43 % 10 = 3 (tenths) -> "4.3"
+    snprintf(buf, size, "%s%d.%d", sign, tenths / 10, tenths % 10);
+}
 /* USER CODE END 0 */
 
 /**
@@ -106,13 +116,20 @@ int main(void)
       HAL_Delay(300);
   }
 
-  // learn baseline before entering the main loop
+  // let the fan warm up before learning, so the warm-up climb isn't learned as normal
+  char *warmup_msg = "warming up...\r\n";
+  HAL_UART_Transmit(&huart1, (uint8_t *)warmup_msg, strlen(warmup_msg), 1000);
+  HAL_Delay(Z_SCORE_WARMUP_MS);
+
+  // learn baseline before entering the main loop; retry until it succeeds,
+  // since detecting against an unlearned baseline would be meaningless
   z_score_preliminary_data_t preliminary_data;
-  if (calculate_z_score_preliminary_data(Z_SCORE_SAMPLE_SIZE, &preliminary_data) != 0)
+  char *learn_msg = "learning baseline...\r\n";
+  HAL_UART_Transmit(&huart1, (uint8_t *)learn_msg, strlen(learn_msg), 1000);
+  while (calculate_z_score_preliminary_data(Z_SCORE_SAMPLE_SIZE, &preliminary_data) != 0)
   {
-      char *err_msg = "learning failed\r\n";
+      char *err_msg = "learning failed, retrying\r\n";
       HAL_UART_Transmit(&huart1, (uint8_t *)err_msg, strlen(err_msg), 1000);
-      Error_Handler();
   }
   /* USER CODE END 2 */
 
@@ -131,16 +148,22 @@ int main(void)
     if (result_ky_015 == 0)
     {
         float z_score = calculate_z_score(preliminary_data, dht11_data);
+
+        char std_dev_str[12];
+        char z_score_str[12];
+        format_tenths(std_dev_str, sizeof(std_dev_str), preliminary_data.standard_deviation);
+        format_tenths(z_score_str, sizeof(z_score_str), z_score);
+
         int len = snprintf(uart_msg, sizeof(uart_msg),
-                           "Temp: %dC  Humidity: %d%%  StdDev: %.1fC  Z-Score: %.1f\r\n",
+                           "Temp: %dC  Humidity: %d%%  StdDev: %sC  Z-Score: %s\r\n",
                            dht11_data.temperature, dht11_data.humidity,
-                           preliminary_data.standard_deviation, z_score);
+                           std_dev_str, z_score_str);
         if (len > (int)sizeof(uart_msg))
             len = sizeof(uart_msg);
         HAL_UART_Transmit(&huart1, (uint8_t *)uart_msg, len, 1000);
 
-        // turn LED and buzzer on if temperature exceeds the alert threshold
-        if (dht11_data.temperature > 20)
+        // turn LED and buzzer on if the reading is an anomaly in either direction
+        if (fabsf(z_score) > Z_SCORE_THRESHOLD)
         {
             HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, GPIO_PIN_SET);    // LED on
             HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, GPIO_PIN_SET);    // buzzer on

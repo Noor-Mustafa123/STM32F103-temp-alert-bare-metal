@@ -5,6 +5,21 @@
 
 #define Z_SCORE_SAMPLE_SIZE 30
 
+// wait for the fan to warm up so the warm-up climb isn't learned as normal
+#define Z_SCORE_WARMUP_MS 60000
+
+// space learning reads out so they cover the fan's natural variation (30 x 10 s = 5 min)
+#define Z_SCORE_LEARN_INTERVAL_MS 10000
+
+// give up on a learning run after this many failed sensor reads
+#define Z_SCORE_MAX_READ_FAILURES 10
+
+// floor for the standard deviation, so identical readings can't disable detection
+#define Z_SCORE_MIN_STD_DEV 0.5f
+
+// |z| above this counts as an anomaly
+#define Z_SCORE_THRESHOLD 3.0f
+
 typedef struct
 {
     float standard_deviation;

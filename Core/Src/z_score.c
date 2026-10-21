@@ -5,19 +5,30 @@
 int calculate_z_score_preliminary_data(int sample_size, z_score_preliminary_data_t *preliminary_data)
 {
     uint8_t readings[sample_size];
+    int collected = 0;
+    int failures = 0;
 
-    // collect all samples once, with a delay between each read
-    for (int i = 0; i < sample_size; i++)
+    // collect samples until we have enough good ones, skipping failed reads
+    while (collected < sample_size)
     {
         dht11_data_t data;
-        if (KY_015_data_reader(&data) != 0)
+        if (KY_015_data_reader(&data) == 0)
         {
-            return -1;
+            readings[collected] = data.temperature;
+            collected++;
         }
-        readings[i] = data.temperature;
-        if (i < sample_size - 1)
+        else
         {
-            HAL_Delay(2000);
+            failures++;
+            if (failures > Z_SCORE_MAX_READ_FAILURES)
+            {
+                return -1;
+            }
+        }
+
+        if (collected < sample_size)
+        {
+            HAL_Delay(Z_SCORE_LEARN_INTERVAL_MS);
         }
     }
 
@@ -39,6 +50,12 @@ int calculate_z_score_preliminary_data(int sample_size, z_score_preliminary_data
     float variance = sum_sq / sample_size;
     float std_dev = sqrtf(variance);
 
+    // a std dev of 0 (all readings identical) would switch detection off
+    if (std_dev < Z_SCORE_MIN_STD_DEV)
+    {
+        std_dev = Z_SCORE_MIN_STD_DEV;
+    }
+
     preliminary_data->average_temperature = average;
     preliminary_data->standard_deviation = std_dev;
 
@@ -47,10 +64,6 @@ int calculate_z_score_preliminary_data(int sample_size, z_score_preliminary_data
 
 float calculate_z_score(z_score_preliminary_data_t preliminary_data, dht11_data_t dht11_data)
 {
-    if (preliminary_data.standard_deviation == 0.0f)
-    {
-        return 0.0f;
-    }
     float difference = dht11_data.temperature - preliminary_data.average_temperature;
     return difference / preliminary_data.standard_deviation;
 }
